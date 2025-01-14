@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Template for AWS baseline infrastructure to power the layout AI-based
+  generator service.
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: Name of an environment. 'dev', 'stage', 'prod' and any name.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  ServicePrefix:
+    Type: String
+    Description: Prefix of microservice
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+
+Outputs:
+  ############## S3 Bucket ##############
+  LayoutsBucketArn:
+    Description: ARN of the S3 bucket
+    Value: !GetAtt LayoutsBucket.Arn
+    Export:
+      Name: LayoutsBucketArn
+  LayoutsBucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref LayoutsBucket
+    Export:
+      Name: LayoutsBucketName
+  GenerationOutputBucketName:
+    Description: Name of the S3 bucket for generation output
+    Value: !Ref GenerationOutputBucket
+    Export:
+      Name: GenerationOutputBucketName
+  GenerationOutputBucketArn:
+    Description: ARN of the S3 bucket for generation output
+    Value: !GetAtt GenerationOutputBucket.Arn
+    Export:
+      Name: GenerationOutputBucketArn
+
+  ############## Private network ##############
+  VPC:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: VPC
+  SecurityGroup:
+    Description: Security group ID
+    Value: !GetAtt SecurityGroup.GroupId
+    Export:
+      Name: SecurityGroup
+  PrivateSubnet1:
+    Description: Private subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: PrivateSubnet1
+  PrivateSubnet2:
+    Description: Private subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: PrivateSubnet2
+
+  ############## OpenSearch ##############
+  OpenSearchDomainArn:
+    Description: ARN of the OpenSearch domain
+    Value: !GetAtt OpenSearchDomain.DomainArn
+    Export:
+      Name: OpenSearchDomainArn
+  OpenSearchDomainName:
+    Description: Name of the OpenSearch domain
+    Value: !Ref OpenSearchDomain
+    Export:
+      Name: OpenSearchDomainName
+  OpenSearchDomainEndpoint:
+    Description: Full endpoint of the OpenSearch domain
+    Value: !GetAtt OpenSearchDomain.DomainEndpoint
+    Export:
+      Name: OpenSearchDomainEndpoint
+
+Resources:
+  ############## S3 Bucket ##############
+  LayoutsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub storied-templates-${EnvName}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  LayoutsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LayoutsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: s3:GetObject
+            Resource: !Sub ${LayoutsBucket.Arn}/*
+          - Sid: AllowAccountUsersToWriteAndModify
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub ${LayoutsBucket.Arn}/*
+
+  GenerationOutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub storied-layout-generation-output-${EnvName}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  GenerationOutputBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref GenerationOutputBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowLambdaToWriteAndRead
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub ${GenerationOutputBucket.Arn}
+              - !Sub ${GenerationOutputBucket.Arn}/*
+
+  ############## Private network ##############
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub LayoutGeneratorVPC-${EnvName}
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+
+  NATGatewaySubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.3.0/28
+      MapPublicIpOnLaunch: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref NATGatewaySubnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref NATGatewaySubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: General security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  S3VPCGatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - s3:*
+            Resource:
+              - '*'
+
+  S3VPCInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn: S3VPCGatewayEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - s3:*
+            Resource:
+              - '*'
+
+  ############## OpenSearch ##############
+  OpenSearchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for OpenSearch
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref SecurityGroup
+
+  OpenSearchDomain:
+    Type: AWS::OpenSearchService::Domain
+    UpdatePolicy:
+      EnableVersionUpgrade: true
+    Properties:
+      DomainName: !Sub layout-gen-embeddings-${EnvName}
+      EngineVersion: OpenSearch_2.13
+      ClusterConfig:
+        InstanceType: t3.medium.search
+        InstanceCount: 2
+        ZoneAwarenessEnabled: true
+        ZoneAwarenessConfig:
+          AvailabilityZoneCount: 2
+      EBSOptions:
+        EBSEnabled: true
+        VolumeSize: 30
+        VolumeType: gp3
+      EncryptionAtRestOptions:
+        Enabled: true
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      DomainEndpointOptions:
+        EnforceHTTPS: true
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: true
+        MasterUserOptions:
+          MasterUserName: admin
+          MasterUserPassword: temporaryP4ssw*rd
+      AccessPolicies:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - es:*
+            Resource: !Sub "arn:${AWS::Partition}:es:${AWS::Region}:\
+              ${AWS::AccountId}:domain/layout-gen-embeddings-${EnvName}/*"
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref OpenSearchSecurityGroup

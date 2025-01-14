@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: API Gateway V2 for Lambda functions
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: Name of an environment. 'dev', 'stage', 'prod' and any name.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  ServicePrefix:
+    Type: String
+    Description: Prefix of microservice
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+  ContentIndexerLambdaArn:
+    Type: String
+  LayoutIndexerLambdaArn:
+    Type: String
+  GeneratorLambdaArn:
+    Type: String
+
+Outputs:
+  ApiGatewayUrl:
+    Description: URL of the API Gateway
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com
+
+Resources:
+  ApiGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ServicePrefix}-api-${EnvName}"
+      ProtocolType: HTTP
+
+  ApiGatewayVpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "${ServicePrefix}-vpc-link-${EnvName}"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+
+  ContentIndexerRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /content-indexer
+      Target: !Sub integrations/${ContentIndexerIntegration}
+
+  LayoutIndexerRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /layout-indexer
+      Target: !Sub integrations/${LayoutIndexerIntegration}
+
+  GeneratorRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /generator
+      Target: !Sub integrations/${GeneratorIntegration}
+
+  ContentIndexerIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ContentIndexerLambdaArn}/invocations
+      PayloadFormatVersion: 2.0
+
+  LayoutIndexerIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LayoutIndexerLambdaArn}/invocations
+      PayloadFormatVersion: 2.0
+
+  GeneratorIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GeneratorLambdaArn}/invocations
+      PayloadFormatVersion: 2.0
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ContentIndexerRoute
+      - LayoutIndexerRoute
+      - GeneratorRoute
+    Properties:
+      ApiId: !Ref ApiGateway
+
+  ApiGatewayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: !Ref EnvName

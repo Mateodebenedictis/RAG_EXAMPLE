@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Template with nested stacks for the layout AI-based generator service.
+
+Parameters:
+  AlarmAction:
+    Type: String
+    Default: arn:aws:sns:us-west-1:007107963913:dev-infrastructure-alerts
+  EnvName:
+    Type: String
+    Description: Name of an environment. 'dev', 'stage', 'prod' and any name.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  CloudWatchEnv:
+    Type: String
+  ServicePrefix:
+    Type: String
+    Description: Prefix of microservice
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  S3Bucket:
+    Type: String
+    Default: builds.storied.co
+    Description: S3 bucket name
+    MinLength: 3
+    MaxLength: 63
+  S3Key:
+    Type: String
+    Description: S3 path of source code package
+    MinLength: 1
+    MaxLength: 1024
+
+  # Environment variables
+  BedrockAWSRegion:
+    Type: String
+  BedrockContentEmbeddingModelId:
+    Type: String
+  BedrockLayoutEmbeddingModelId:
+    Type: String
+  BedrockGenerationModelId:
+    Type: String
+  OpenSearchContentIndex:
+    Type: String
+  OpenSearchLayoutIndex:
+    Type: String
+  ContentS3BucketName:
+    Type: String
+  ContentS3BucketArn:
+    Type: String
+  SentryDsn:
+    Type: String
+
+Outputs:
+  VpcId:
+    Value: !GetAtt CoreServices.Outputs.VPC
+  Subnet1:
+    Value: !GetAtt CoreServices.Outputs.PrivateSubnet1
+  Subnet2:
+    Value: !GetAtt CoreServices.Outputs.PrivateSubnet2
+  SecurityGroup:
+    Value: !GetAtt CoreServices.Outputs.SecurityGroup
+  OpenSearchDomain:
+    Value: !GetAtt CoreServices.Outputs.OpenSearchDomainName
+  OpenSearchDomainArn:
+    Value: !GetAtt CoreServices.Outputs.OpenSearchDomainArn
+  ApiGatewayUrl:
+    Value: !GetAtt ApiGateway.Outputs.ApiGatewayUrl
+
+Resources:
+  CoreServices:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./services.yaml
+      Parameters:
+        EnvName: !Ref EnvName
+        ServicePrefix: !Sub "${ServicePrefix}-core-services"
+
+  ContentIndexerLambda:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda.yaml
+      Parameters:
+        AlarmAction: !Ref AlarmAction
+        EnvName: !Ref EnvName
+        CloudWatchEnv: !Ref CloudWatchEnv
+        ServicePrefix: !Sub "${ServicePrefix}-content-indexer"
+        ServiceDescription: Indexer for the knowledge base of the end user.
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+        LambdaHandler: content_indexer.lambda_handler
+        LambdaTimeout: 180
+        SecurityGroup: !GetAtt CoreServices.Outputs.SecurityGroup
+        Subnet1: !GetAtt CoreServices.Outputs.PrivateSubnet1
+        Subnet2: !GetAtt CoreServices.Outputs.PrivateSubnet2
+        BedrockAWSRegion: !Ref BedrockAWSRegion
+        BedrockContentEmbeddingModelId: !Ref BedrockContentEmbeddingModelId
+        BedrockLayoutEmbeddingModelId: !Ref BedrockLayoutEmbeddingModelId
+        BedrockGenerationModelId: !Ref BedrockGenerationModelId
+        OpenSearchAWSRegion: !Sub "${AWS::Region}"
+        OpenSearchContentIndex: !Ref OpenSearchContentIndex
+        OpenSearchLayoutIndex: !Ref OpenSearchLayoutIndex
+        OpenSearchEndpoint: !GetAtt CoreServices.Outputs.OpenSearchDomainEndpoint
+        ContentS3BucketName: !Ref ContentS3BucketName
+        ContentS3BucketArn: !Ref ContentS3BucketArn
+        LayoutS3BucketName: !GetAtt CoreServices.Outputs.LayoutsBucketName
+        LayoutS3BucketArn: !GetAtt CoreServices.Outputs.LayoutsBucketArn
+        GenerationOutputBucketName: !GetAtt CoreServices.Outputs.GenerationOutputBucketName
+        GenerationOutputBucketArn: !GetAtt CoreServices.Outputs.GenerationOutputBucketArn
+        SentryDsn: !Ref SentryDsn
+
+  LayoutIndexerLambda:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda.yaml
+      Parameters:
+        AlarmAction: !Ref AlarmAction
+        EnvName: !Ref EnvName
+        CloudWatchEnv: !Ref CloudWatchEnv
+        ServicePrefix: !Sub "${ServicePrefix}-layout-indexer"
+        ServiceDescription: Indexer for the layout templates.
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+        LambdaHandler: layout_indexer.lambda_handler
+        LambdaTimeout: 60
+        SecurityGroup: !GetAtt CoreServices.Outputs.SecurityGroup
+        Subnet1: !GetAtt CoreServices.Outputs.PrivateSubnet1
+        Subnet2: !GetAtt CoreServices.Outputs.PrivateSubnet2
+        BedrockAWSRegion: !Ref BedrockAWSRegion
+        BedrockContentEmbeddingModelId: !Ref BedrockContentEmbeddingModelId
+        BedrockLayoutEmbeddingModelId: !Ref BedrockLayoutEmbeddingModelId
+        BedrockGenerationModelId: !Ref BedrockGenerationModelId
+        OpenSearchAWSRegion: !Sub "${AWS::Region}"
+        OpenSearchContentIndex: !Ref OpenSearchContentIndex
+        OpenSearchLayoutIndex: !Ref OpenSearchLayoutIndex
+        OpenSearchEndpoint: !GetAtt CoreServices.Outputs.OpenSearchDomainEndpoint
+        ContentS3BucketName: !Ref ContentS3BucketName
+        ContentS3BucketArn: !Ref ContentS3BucketArn
+        LayoutS3BucketName: !GetAtt CoreServices.Outputs.LayoutsBucketName
+        LayoutS3BucketArn: !GetAtt CoreServices.Outputs.LayoutsBucketArn
+        GenerationOutputBucketName: !GetAtt CoreServices.Outputs.GenerationOutputBucketName
+        GenerationOutputBucketArn: !GetAtt CoreServices.Outputs.GenerationOutputBucketArn
+        SentryDsn: !Ref SentryDsn
+
+  GenerationLambda:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda.yaml
+      Parameters:
+        AlarmAction: !Ref AlarmAction
+        EnvName: !Ref EnvName
+        CloudWatchEnv: !Ref CloudWatchEnv
+        ServicePrefix: !Sub "${ServicePrefix}-generator"
+        ServiceDescription: Lambda function for AI generation
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+        LambdaHandler: generation.lambda_handler
+        LambdaTimeout: 180
+        SecurityGroup: !GetAtt CoreServices.Outputs.SecurityGroup
+        Subnet1: !GetAtt CoreServices.Outputs.PrivateSubnet1
+        Subnet2: !GetAtt CoreServices.Outputs.PrivateSubnet2
+        BedrockAWSRegion: !Ref BedrockAWSRegion
+        BedrockContentEmbeddingModelId: !Ref BedrockContentEmbeddingModelId
+        BedrockLayoutEmbeddingModelId: !Ref BedrockLayoutEmbeddingModelId
+        BedrockGenerationModelId: !Ref BedrockGenerationModelId
+        OpenSearchAWSRegion: !Sub "${AWS::Region}"
+        OpenSearchContentIndex: !Ref OpenSearchContentIndex
+        OpenSearchLayoutIndex: !Ref OpenSearchLayoutIndex
+        OpenSearchEndpoint: !GetAtt CoreServices.Outputs.OpenSearchDomainEndpoint
+        ContentS3BucketName: !Ref ContentS3BucketName
+        ContentS3BucketArn: !Ref ContentS3BucketArn
+        LayoutS3BucketName: !GetAtt CoreServices.Outputs.LayoutsBucketName
+        LayoutS3BucketArn: !GetAtt CoreServices.Outputs.LayoutsBucketArn
+        GenerationOutputBucketName: !GetAtt CoreServices.Outputs.GenerationOutputBucketName
+        GenerationOutputBucketArn: !GetAtt CoreServices.Outputs.GenerationOutputBucketArn
+        SentryDsn: !Ref SentryDsn
+
+  ApiGateway:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./api-gateway.yaml
+      Parameters:
+        EnvName: !Ref EnvName
+        ServicePrefix: !Sub "${ServicePrefix}-api-gateway"
+        VpcId: !GetAtt CoreServices.Outputs.VPC
+        PrivateSubnet1: !GetAtt CoreServices.Outputs.PrivateSubnet1
+        PrivateSubnet2: !GetAtt CoreServices.Outputs.PrivateSubnet2
+        SecurityGroup: !GetAtt CoreServices.Outputs.SecurityGroup
+        ContentIndexerLambdaArn: !GetAtt ContentIndexerLambda.Outputs.LambdaFunctionARN
+        LayoutIndexerLambdaArn: !GetAtt LayoutIndexerLambda.Outputs.LambdaFunctionARN
+        GeneratorLambdaArn: !GetAtt GenerationLambda.Outputs.LambdaFunctionARN

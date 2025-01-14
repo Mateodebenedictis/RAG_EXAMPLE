@@ -1,0 +1,317 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Template for Lambda function for AI
+
+Parameters:
+  AlarmAction:
+    Type: String
+    Default: arn:aws:sns:us-west-1:007107963913:dev-infrastructure-alerts
+  EnvName:
+    Type: String
+    Description: Name of an environment. 'dev', 'stage', 'prod' and any name.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  CloudWatchEnv:
+    Type: String
+  ServicePrefix:
+    Type: String
+    Description: Prefix of microservice
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  ServiceDescription:
+    Type: String
+    Default: Lambda function.
+    Description: Short description of the Lambda's purpose.
+  S3Bucket:
+    Type: String
+    Default: builds.storied.co
+    Description: S3 bucket name
+    MinLength: 3
+    MaxLength: 63
+  S3Key:
+    Type: String
+    Description: S3 path of source code package
+    MinLength: 1
+    MaxLength: 1024
+  LambdaHandler:
+    Type: String
+    Default: index.handler
+    Description: Path of a Lambda Handler.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  LambdaTimeout:
+    Type: Number
+    Description: Lambda function timeout in seconds.
+    Default: 180
+  Subnet1:
+    Type: String
+    Description: ID of the first subnet of the VPC
+  Subnet2:
+    Type: String
+    Description: ID of the second subnet of the VPC
+  SecurityGroup:
+    Type: String
+    Description: ID of the security group of the VPC
+
+  # Environment variables
+  BedrockAWSRegion:
+    Type: String
+  BedrockContentEmbeddingModelId:
+    Type: String
+  BedrockLayoutEmbeddingModelId:
+    Type: String
+  BedrockGenerationModelId:
+    Type: String
+  OpenSearchAWSRegion:
+    Type: String
+  OpenSearchContentIndex:
+    Type: String
+  OpenSearchLayoutIndex:
+    Type: String
+  OpenSearchEndpoint:
+    Type: String
+  ContentS3BucketName:
+    Type: String
+  ContentS3BucketArn:
+    Type: String
+  LayoutS3BucketName:
+    Type: String
+  LayoutS3BucketArn:
+    Type: String
+  GenerationOutputBucketName:
+    Type: String
+  GenerationOutputBucketArn:
+    Type: String
+  SentryDsn:
+    Type: String
+
+Outputs:
+  LambdaRoleARN:
+    Description: Role for Lambda execution.
+    Value: !GetAtt LambdaRole.Arn
+  LambdaFunctionName:
+    Value: !Ref LambdaFunction
+    Description: Lambda function name
+  LambdaFunctionARN:
+    Value: !GetAtt LambdaFunction.Arn
+    Description: Lambda function ARN
+
+Resources:
+  ############## Lambda Role ##############
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ServicePrefix}-${EnvName}-lambda-role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ReadS3Assets
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Ref ContentS3BucketArn
+                  - !Sub ${ContentS3BucketArn}/*
+                  - !Ref LayoutS3BucketArn
+                  - !Sub ${LayoutS3BucketArn}/*
+                  - !Ref GenerationOutputBucketArn
+                  - !Sub ${GenerationOutputBucketArn}/*
+        - PolicyName: InvokeLLMs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/*
+        - PolicyName: UseOpenSearch
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - es:ESHttpGet
+                  - es:ESHttpPost
+                  - es:ESHttpPut
+                Resource:
+                  - !Sub arn:${AWS::Partition}:es:${AWS::Region}:${AWS::AccountId}:domain/layout-gen-embeddings-${EnvName}/*
+      Path: /
+
+  ############## Lambda Function ##############
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${ServicePrefix}-${EnvName}
+      Description: !Ref ServiceDescription
+      Runtime: python3.12
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+      Handler: !Ref LambdaHandler
+      MemorySize: 1024
+      Timeout: !Ref LambdaTimeout
+      Role: !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds:
+          - !Ref Subnet1
+          - !Ref Subnet2
+      Environment:
+        Variables:
+          ENV: !Ref EnvName
+          TZ: UTC
+          BEDROCK_AWS_REGION: !Ref BedrockAWSRegion
+          BEDROCK_CONTENT_EMBEDDING_MODEL_ID: !Ref BedrockContentEmbeddingModelId
+          BEDROCK_LAYOUT_EMBEDDING_MODEL_ID: !Ref BedrockLayoutEmbeddingModelId
+          BEDROCK_GENERATION_MODEL_ID: !Ref BedrockGenerationModelId
+          OPENSEARCH_AWS_REGION: !Ref OpenSearchAWSRegion
+          OPENSEARCH_CONTENT_INDEX: !Ref OpenSearchContentIndex
+          OPENSEARCH_LAYOUT_INDEX: !Ref OpenSearchLayoutIndex
+          OPENSEARCH_ENDPOINT: !Sub "https://${OpenSearchEndpoint}"
+          CONTENT_S3_BUCKET_NAME: !Ref ContentS3BucketName
+          LAYOUT_S3_BUCKET_NAME: !Ref LayoutS3BucketName
+          GENERATION_OUTPUT_S3_BUCKET_NAME: !Ref GenerationOutputBucketName
+          SENTRY_DSN: !Ref SentryDsn
+          OPENSEARCH_USERNAME: admin
+          OPENSEARCH_PASSWORD: temporaryP4ssw*rd
+      Tags:
+        - Key: env
+          Value: !Ref EnvName
+        - Key: feature
+          Value: !Ref ServicePrefix
+  EventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      MaximumRetryAttempts: 0
+      Qualifier: $LATEST
+    DependsOn: LambdaFunction
+
+  LambdaFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:*
+
+  ############## CloudWatch Log Group ##############
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${LambdaFunction}"
+      RetentionInDays: 14
+
+  ############## CloudWatch Log Insights ##############
+  LambdaErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterPattern: '"ERROR"'
+      LogGroupName: !Ref LambdaLogGroup
+      MetricTransformations:
+        - DefaultValue: 0
+          MetricName: !Sub "${LambdaFunction}-LoggedError"
+          MetricNamespace: CloudWatch/LogsInsights
+          MetricValue: 1
+          Unit: Count
+
+  ############## CloudWatch Alarm based on LogInsights ##############
+  LambdaLogInsightsErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${CloudWatchEnv} Lambda ${LambdaFunction}: More than 1 errors in LogInsights in last 5 min - Info alarm"
+      AlarmDescription: !Sub "Created and deployed to CloudFormation stack - ${AWS::StackName}"
+      AlarmActions:
+        - !Ref AlarmAction
+      OKActions:
+        - !Ref AlarmAction
+      Namespace: CloudWatch/LogsInsights
+      MetricName: !Sub "${LambdaFunction}-LoggedError"
+      Statistic: Sum
+      Period: 300 # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ############## Recommended CloudWatch Alarms ##############
+  # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Best_Practice_Recommended_Alarms_AWS_Services.html#Lambda
+  LambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${CloudWatchEnv} Lambda ${LambdaFunction}: More than 1 errors in last 5 min - Info alarm"
+      AlarmDescription: !Sub "This alarm detects high error counts. Errors includes the exceptions thrown by the code as well as exceptions thrown by the Lambda runtime. You can check the logs related to the function to diagnose the issue. Created and deployed to CloudFormation stack - ${AWS::StackName}"
+      AlarmActions:
+        - !Ref AlarmAction
+      OKActions:
+        - !Ref AlarmAction
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunction
+      Statistic: Sum
+      Period: 60 # 1 minute
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  LambdaThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${CloudWatchEnv} Lambda ${LambdaFunction}: More than 1 throttles in last 5 min - Info alarm"
+      AlarmDescription: !Sub "This alarm detects a high number of throttled invocation requests. Throttling occurs when there is no concurrency is available for scale up.  Created and deployed to CloudFormation stack - ${AWS::StackName}"
+      AlarmActions:
+        - !Ref AlarmAction
+      OKActions:
+        - !Ref AlarmAction
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunction
+      Statistic: Sum
+      Period: 60 # 1 minute
+      EvaluationPeriods: 5
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${CloudWatchEnv} Lambda ${LambdaFunction}: Duration is greater than 80% of Lambda timeout in last 15 min - Info alarm"
+      AlarmDescription: !Sub "This alarm detects long duration times for processing an event by a Lambda function. Created and deployed to CloudFormation stack - ${AWS::StackName}"
+      AlarmActions:
+        - !Ref AlarmAction
+      OKActions:
+        - !Ref AlarmAction
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunction
+      ExtendedStatistic: p90
+      Period: 60 # 1 minute
+      EvaluationPeriods: 15
+      Threshold: 96000 # Timeout 120 sec * 80% = 96 sec
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
